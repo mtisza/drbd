@@ -271,6 +271,7 @@ struct dtr_transport {
 
 	atomic_t cm_count;
 	wait_queue_head_t cm_count_wait;
+	struct tasklet_struct control_tasklet;
 };
 
 struct dtr_cm {
@@ -360,6 +361,8 @@ static void dtr_tx_timeout_fn(struct timer_list *t);
 static void dtr_control_timer_fn(struct timer_list *t);
 static void dtr_tx_timeout_work_fn(struct work_struct *work);
 static void dtr_cma_connect_work_fn(struct work_struct *work);
+static struct dtr_rx_desc *dtr_next_rx_desc(struct dtr_stream *rdma_stream);
+static void dtr_control_tasklet_fn(struct tasklet_struct *t);
 
 static struct drbd_transport_class rdma_transport_class = {
 	.name = "rdma",
@@ -504,6 +507,10 @@ static int dtr_init(struct drbd_transport *transport)
 
 	atomic_set(&rdma_transport->cm_count, 0);
 	init_waitqueue_head(&rdma_transport->cm_count_wait);
+
+	rdma_transport->control_tasklet.callback = dtr_control_tasklet_fn;
+	rdma_transport->control_tasklet.use_callback = true;
+	atomic_set(&rdma_transport->control_tasklet.count, 0);
 
 	return 0;
 }
@@ -1673,6 +1680,17 @@ static void dtr_control_data_ready(struct dtr_stream *rdma_stream, struct dtr_rx
 	dtr_recycle_rx_desc(transport, CONTROL_STREAM, &rx_desc, GFP_ATOMIC);
 }
 
+static void dtr_control_tasklet_fn(struct tasklet_struct *t)
+{
+	struct dtr_transport *rdma_transport =
+		from_tasklet(rdma_transport, t, control_tasklet);
+	struct dtr_stream *rdma_stream = &rdma_transport->stream[CONTROL_STREAM];
+	struct dtr_rx_desc *rx_desc;
+
+	while ((rx_desc = dtr_next_rx_desc(rdma_stream)))
+		dtr_control_data_ready(rdma_stream, rx_desc);
+}
+
 static int dtr_handle_rx_cq_event(struct ib_cq *cq, struct dtr_cm *cm)
 {
 	struct dtr_path *path = cm->path;
@@ -1749,16 +1767,14 @@ static int dtr_handle_rx_cq_event(struct ib_cq *cq, struct dtr_cm *cm)
 		if (immediate.stream == ST_CONTROL)
 			mod_timer(&rdma_transport->control_timer, jiffies + rdma_stream->recv_timeout);
 
-		if (immediate.stream == ST_CONTROL &&
-		    rdma_stream->rx_sequence == immediate.sequence) {
-			dtr_control_data_ready(rdma_stream, rx_desc);
-			while ((rx_desc = dtr_next_rx_desc(rdma_stream)))
-				dtr_control_data_ready(rdma_stream, rx_desc);
-		} else {
-			rx_desc->sequence = immediate.sequence;
-			dtr_order_rx_descs(rdma_stream, rx_desc);
+		rx_desc->sequence = immediate.sequence;
+		dtr_order_rx_descs(rdma_stream, rx_desc);
+
+		if (immediate.stream == ST_CONTROL)
+			tasklet_schedule(&rdma_transport->control_tasklet);
+		else
 			wake_up_interruptible(&rdma_stream->recv_wq);
-		}
+
 	}
 
 	return 0;
