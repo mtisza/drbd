@@ -1206,8 +1206,8 @@ static void dtr_cma_connect_work_fn(struct work_struct *work)
 
 	return;
 out:
-	kref_put(&cm->kref, dtr_destroy_cm);
 	dtr_cma_retry_connect(path, cm);
+	kref_put(&cm->kref, dtr_destroy_cm);
 }
 
 static void dtr_cma_disconnect_work_fn(struct work_struct *work)
