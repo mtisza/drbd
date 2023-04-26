@@ -2181,7 +2181,7 @@ static int __dtr_post_tx_desc(struct dtr_cm *cm, struct dtr_tx_desc *tx_desc)
 		nc = rcu_dereference(transport->net_conf);
 		timeout = nc->ping_timeo;
 		rcu_read_unlock();
-		was_active = mod_timer(&cm->tx_timeout, jiffies + timeout * HZ / 20);
+		was_active = mod_timer(&cm->tx_timeout, jiffies + timeout * HZ / 10);
 		if (!was_active)
 			kref_get(&cm->kref);
 	} else {
