@@ -511,9 +511,7 @@ static int dtr_init(struct drbd_transport *transport)
 	atomic_set(&rdma_transport->cm_count, 0);
 	init_waitqueue_head(&rdma_transport->cm_count_wait);
 
-	rdma_transport->control_tasklet.callback = dtr_control_tasklet_fn;
-	rdma_transport->control_tasklet.use_callback = true;
-	atomic_set(&rdma_transport->control_tasklet.count, 0);
+	tasklet_setup(&rdma_transport->control_tasklet, dtr_control_tasklet_fn);
 
 	return 0;
 }
@@ -1668,8 +1666,6 @@ static void dtr_control_data_ready(struct dtr_stream *rdma_stream, struct dtr_rx
 	buffer.buffer = page_address(rx_desc->page);
 	buffer.avail = rx_desc->size;
 	drbd_control_data_ready(transport, &buffer);
-	rdma_stream->rx_sequence =
-		(rdma_stream->rx_sequence + 1) & ((1UL << SEQUENCE_BITS) - 1);
 
 	dtr_recycle_rx_desc(transport, CONTROL_STREAM, &rx_desc, GFP_ATOMIC);
 }
