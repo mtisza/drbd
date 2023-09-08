@@ -1785,7 +1785,6 @@ static void dtr_rx_cq_event_handler(struct ib_cq *cq, void *ctx)
 	int err, rc;
 
 	do {
-		bool error_rx_descs_empty = true;
 		unsigned long irq_flags;
 		do {
 			err = dtr_handle_rx_cq_event(cq, cm);
@@ -1797,7 +1796,6 @@ static void dtr_rx_cq_event_handler(struct ib_cq *cq, void *ctx)
 			if (!schedule_work(&cm->end_rx_work)) {
 				kref_put(&cm->kref, dtr_destroy_cm);
 			}
-			error_rx_descs_empty = false;
 		}
 		spin_unlock_irqrestore(&cm->error_rx_descs_lock, irq_flags);
 
