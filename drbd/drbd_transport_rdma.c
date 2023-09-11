@@ -1475,10 +1475,11 @@ static int dtr_send_flow_control_msg(struct dtr_path *path, gfp_t gfp_mask)
 	struct dtr_flow_control msg;
 	enum drbd_stream i;
 	int err, n[2], rx_desc_stolen_from = -1, rx_descs = 0;
+	unsigned long irq_flags;
 
 	msg.magic = cpu_to_be32(DTR_MAGIC);
 
-	spin_lock_bh(&path->send_flow_control_lock);
+	spin_lock_irqsave(&path->send_flow_control_lock, irq_flags);
 	/* dtr_send_flow_control_msg() is called from the receiver thread and
 	   areceiver, asender (multiple threads).
 	   determining the number of new tx_descs and subtracting this number
@@ -1495,7 +1496,7 @@ static int dtr_send_flow_control_msg(struct dtr_path *path, gfp_t gfp_mask)
 		if (rx_desc_stolen_from == -1 && atomic_dec_if_positive(&flow->peer_rx_descs) >= 0)
 			rx_desc_stolen_from = i;
 	}
-	spin_unlock_bh(&path->send_flow_control_lock);
+	spin_unlock_irqrestore(&path->send_flow_control_lock, irq_flags);
 
 	if (rx_desc_stolen_from == -1) {
 		tr_err(&path->rdma_transport->transport,
@@ -1657,7 +1658,7 @@ static void dtr_control_data_ready(struct dtr_stream *rdma_stream, struct dtr_rx
 	struct dtr_path *path = cm->path;
 	struct dtr_flow *flow = &path->flow[CONTROL_STREAM];
 
-        if (atomic_read(&flow->rx_descs_known_to_peer) < atomic_read(&flow->rx_descs_posted) / 8)
+	if (atomic_read(&flow->rx_descs_known_to_peer) < atomic_read(&flow->rx_descs_posted) / 8)
 		dtr_send_flow_control_msg(path, GFP_NOIO);
 
 	ib_dma_sync_single_for_cpu(cm->id->device, rx_desc->sge.addr,
@@ -1751,6 +1752,9 @@ static int dtr_handle_rx_cq_event(struct ib_cq *cq, struct dtr_cm *cm)
 			tr_err(&rdma_transport->transport, "dtr_repost_rx_desc() failed %d", err);
 		flow = &path->flow[rx_desc_stolen_from];
 		atomic_dec(&flow->rx_descs_known_to_peer);
+
+		if (atomic_read(&flow->rx_descs_known_to_peer) < atomic_read(&flow->rx_descs_posted) / 8)
+			dtr_send_flow_control_msg(path, GFP_NOIO);
 	} else {
 		struct dtr_flow *flow = &path->flow[immediate.stream];
 		struct dtr_stream *rdma_stream = &rdma_transport->stream[immediate.stream];
