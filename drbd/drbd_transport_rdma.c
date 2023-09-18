@@ -1183,13 +1183,13 @@ static void dtr_cma_connect_work_fn(struct work_struct *work)
 	struct dtr_path *path = cm->path;
 	struct drbd_transport *transport = &path->rdma_transport->transport;
 	enum connect_state_enum p;
-	int err;
+	int err = 0;
 
 	p = atomic_cmpxchg(&path->cs.active_state, PCS_REQUEST_ABORT, PCS_INACTIVE);
 	if (p != PCS_CONNECTING) {
 		wake_up(&path->cs.wq);
 		kref_put(&cm->kref, dtr_destroy_cm); /* for work */
-		return;
+		goto out;
 	}
 
 	/* kref_put()/kref_get(&cm->kref) Recycling reference for work for path->cm */
@@ -1206,10 +1206,13 @@ static void dtr_cma_connect_work_fn(struct work_struct *work)
 		goto out;
 	}
 
-	return;
 out:
-	kref_put(&cm->kref, dtr_destroy_cm);
-	dtr_cma_retry_connect(path, cm);
+	if (err) {
+		dtr_cma_retry_connect(path, cm);
+		kref_put(&cm->kref, dtr_destroy_cm);
+	}
+	kref_put(&cm->kref, dtr_destroy_cm);  // the work has an additional ref
+	return;
 }
 
 static void dtr_cma_disconnect_work_fn(struct work_struct *work)
@@ -1299,9 +1302,11 @@ static int dtr_cma_event_handler(struct rdma_cm_id *cm_id, struct rdma_cm_event 
 	case RDMA_CM_EVENT_ROUTE_RESOLVED:
 		// pr_info("%s: RDMA_CM_EVENT_ROUTE_RESOLVED\n", cm->name);
 
-		kref_get(&cm->kref);
-		schedule_work(&cm->connect_work);
-		break;
+		kref_get(&cm->kref); // dtr_cma_connect_work_fn will call kref_put()
+		if (!schedule_work(&cm->connect_work))
+			kref_put(&cm->kref, dtr_destroy_cm);
+		wake_up(&cm->state_wq);
+		return 0;
 
 	case RDMA_CM_EVENT_CONNECT_REQUEST:
 		// pr_info("%s: RDMA_CM_EVENT_CONNECT_REQUEST\n", cm->name);
