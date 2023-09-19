@@ -1107,7 +1107,6 @@ static int dtr_start_try_connect(struct dtr_connect_state *cs)
 				(struct sockaddr *)&path->path.peer_addr,
 				2000);
 	if (err) {
-		kref_put(&cm->kref, dtr_destroy_cm);
 		tr_err(transport, "rdma_resolve_addr error %d\n", err);
 		goto out;
 	}
@@ -1202,6 +1201,7 @@ static void dtr_cma_connect_work_fn(struct work_struct *work)
 	kref_get(&cm->kref); /* Expecting RDMA_CM_EVENT_ESTABLISHED */
 	err = rdma_connect(cm->id, &dtr_conn_param);
 	if (err) {
+		kref_put(&cm->kref, dtr_destroy_cm); /* no RDMA_CM_EVENT_ESTABLISHED */
 		tr_err(transport, "rdma_connect error %d\n", err);
 		goto out;
 	}
@@ -1209,7 +1209,7 @@ static void dtr_cma_connect_work_fn(struct work_struct *work)
 	kref_put(&cm->kref, dtr_destroy_cm); /* for work */
 	return;
 out:
-	kref_put(&cm->kref, dtr_destroy_cm);
+	kref_put(&cm->kref, dtr_destroy_cm); /* for work */
 	dtr_cma_retry_connect(path, cm);
 }
 
