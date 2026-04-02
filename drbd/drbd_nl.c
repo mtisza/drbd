@@ -1537,12 +1537,50 @@ char *ppsize(char *buf, unsigned long long size)
  * and should be short-lived. */
 /* It needs to be a counter, since multiple threads might
    independently suspend and resume IO. */
+/* RCA instrumentation: keep the old buggy predicate so we can log when the
+ * fixed code takes a wait that pre-fix builds would have skipped. */
+static bool drbd_suspend_io_old_bug_would_skip(enum suspend_scope ss,
+					       int pending_writes,
+					       int pending_reads)
+{
+	return ((((pending_writes + ss) == READ_AND_WRITE) ? pending_reads : 0) == 0);
+}
+
 void drbd_suspend_io(struct drbd_device *device, enum suspend_scope ss)
 {
+	unsigned long start_jif = 0;
+	int pending_writes = 0;
+	int pending_reads = 0;
+	int pending_total = 0;
+	bool emit_fix_log = false;
+
 	atomic_inc(&device->suspend_cnt);
+
+	if (!drbd_suspended(device)) {
+		pending_writes = atomic_read(&device->ap_bio_cnt[WRITE]);
+		if (ss == READ_AND_WRITE)
+			pending_reads = atomic_read(&device->ap_bio_cnt[READ]);
+		pending_total = pending_writes + pending_reads;
+
+		if (pending_total != 0 &&
+		    drbd_suspend_io_old_bug_would_skip(ss, pending_writes, pending_reads) &&
+		    drbd_device_ratelimit(device, GENERIC)) {
+			emit_fix_log = true;
+			start_jif = jiffies;
+		}
+	}
+
 	wait_event(device->misc_wait, drbd_suspended(device) ||
 		   (atomic_read(&device->ap_bio_cnt[WRITE]) +
-		    ss == READ_AND_WRITE ? atomic_read(&device->ap_bio_cnt[READ]) : 0) == 0);
+		    (ss == READ_AND_WRITE ? atomic_read(&device->ap_bio_cnt[READ]) : 0)) == 0);
+
+	if (emit_fix_log)
+		drbd_warn(device,
+			  "RCA proof: suspend_io used fixed wait logic (scope=%s pre_writes=%d pre_reads=%d waited=%u ms, resource_suspended=%d); pre-fix code would have skipped this wait\n",
+			  ss == WRITE_ONLY ? "WRITE_ONLY" : "READ_AND_WRITE",
+			  pending_writes, pending_reads,
+			  jiffies_to_msecs(jiffies - start_jif),
+			  drbd_suspended(device));
 }
 
 void drbd_resume_io(struct drbd_device *device)
