@@ -85,6 +85,7 @@ static void check_wrongly_set_mdf_exists(struct drbd_device *);
 static void update_members(struct drbd_resource *resource);
 static bool calc_data_accessible(struct drbd_state_change *state_change, int n_device,
 				 enum which_state which);
+static bool extra_ldev_ref_for_after_state_chg(enum drbd_disk_state *disk_state);
 
 /* We need to stay consistent if we are neighbor of a diskless primary with
    different UUID. This function should be used if the device was D_UP_TO_DATE
@@ -800,6 +801,26 @@ static void queue_after_state_change_work(struct drbd_resource *resource,
 	}
 }
 
+static void put_ldev_on_no_after_state_change_work(struct drbd_resource *resource)
+{
+	struct drbd_device *device;
+	int vnr;
+
+	lockdep_assert_held(&resource->state_rwlock);
+
+	idr_for_each_entry(&resource->devices, device, vnr) {
+		enum drbd_disk_state *disk_state = device->disk_state;
+
+		/* finish_state_change() took an extra ldev reference for state
+		 * changes where w_after_state_change() would eventually put_ldev()
+		 * again.  If no after state change work was allocated, release
+		 * that extra reference after NEW became NOW so put_ldev() sees the
+		 * committed state and can trigger follow-up cleanup as intended. */
+		if (extra_ldev_ref_for_after_state_chg(disk_state))
+			put_ldev(device);
+	}
+}
+
 static enum drbd_state_rv ___end_state_change(struct drbd_resource *resource, struct completion *done,
 					      enum drbd_state_rv rv, const char *tag)
 {
@@ -922,6 +943,9 @@ static enum drbd_state_rv ___end_state_change(struct drbd_resource *resource, st
 	}
 
 	wake_up_all(&resource->state_wait);
+
+	if (!work)
+		put_ldev_on_no_after_state_change_work(resource);
 
 	/* Call this after applying the state change from NEW to NOW. */
 	queue_after_state_change_work(resource, done, work);
