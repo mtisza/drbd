@@ -939,8 +939,8 @@ void *__conn_prepare_command(struct drbd_connection *connection, int size,
 				    enum drbd_stream drbd_stream)
 {
 	struct drbd_transport *transport = &connection->transport;
+	char *p;
 	int header_size;
-	void *p;
 
 	if (connection->cstate[NOW] < C_CONNECTING)
 		return NULL;
@@ -949,10 +949,10 @@ void *__conn_prepare_command(struct drbd_connection *connection, int size,
 		return NULL;
 
 	header_size = drbd_header_size(connection);
-	p = alloc_send_buffer(connection, header_size + size, drbd_stream) + header_size;
+	p = alloc_send_buffer(connection, header_size + size, drbd_stream);
 	if (IS_ERR(p))
 		return NULL;
-	return p;
+	return p + header_size;
 }
 
 /**
